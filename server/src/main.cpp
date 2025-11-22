@@ -3,7 +3,7 @@
 #include <fstream>
 #include <iostream>
 #include <netinet/in.h>
-#include <openssl/sha.h>
+#include <openssl/evp.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,11 +12,51 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
+#include <iomanip>
 #define PORT 7777
 #define MAX_QUEUED_CONNECTIONS 5
 
 std::vector<int> client_list;
 pthread_mutex_t print_lock = PTHREAD_MUTEX_INITIALIZER;
+
+std::string sha256_file(const std::string &path){ /* made by AI */
+  std::ifstream f(path, std::ios::binary);
+  
+  if (!f) throw std::runtime_error("erro ao abrir o arquivo");
+  
+  EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+  
+  if (!ctx) throw std::runtime_error("erro ao criar o contexto");
+  
+  if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1)
+    throw std::runtime_error("erro no digestInit");
+
+  char buf[4096];
+  
+  while(f.good()){
+    f.read(buf, sizeof(buf));
+    std::streamsize s = f.gcount();
+    if (s > 0){
+      if (EVP_DigestUpdate(ctx, buf, s) != 1)
+        throw std::runtime_error("erro no digestUpdate");
+    }
+  }
+  unsigned char hash[EVP_MAX_MD_SIZE];
+  unsigned int hash_len = 0;
+
+  if(EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1)
+    throw std::runtime_error("erro no digestFinal");
+
+  EVP_MD_CTX_free(ctx);
+
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0');
+
+  for (unsigned i = 0; i < hash_len; ++i)
+    oss << std::setw(2) << (int)hash[i];
+
+  return oss.str();
+}
 
 void *client_thread(void *arg) {
   std::string request;
@@ -80,6 +120,11 @@ void *client_thread(void *arg) {
         send(sock, buff, bytes_read, 0);
         delete[] buff;
       }
+      char* buff = new char[5];
+      recv(sock, buff, 5, 0);
+      std::string local_hash = sha256_file(file_name);
+      send(sock, local_hash.data(), local_hash.size(), 0);
+      delete[] buff;
       ifs.close();
     }
     request.clear();

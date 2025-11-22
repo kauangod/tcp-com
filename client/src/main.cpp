@@ -1,9 +1,11 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <ios>
 #include <iostream>
 #include <netinet/in.h>
+#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +36,47 @@ int parse_command(std::string command, int *o1, int *o2, int *o3, int *o4) {
     return -1;
   }
   return 0;
+}
+
+std::string sha256_file(const std::string &path) { /* made by AI */
+  std::ifstream f(path, std::ios::binary);
+
+  if (!f)
+    throw std::runtime_error("erro ao abrir o arquivo");
+
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+
+  if (!ctx)
+    throw std::runtime_error("erro ao criar o contexto");
+
+  if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1)
+    throw std::runtime_error("erro no digestInit");
+
+  char buf[4096];
+
+  while (f.good()) {
+    f.read(buf, sizeof(buf));
+    std::streamsize s = f.gcount();
+    if (s > 0) {
+      if (EVP_DigestUpdate(ctx, buf, s) != 1)
+        throw std::runtime_error("erro no digestUpdate");
+    }
+  }
+  unsigned char hash[EVP_MAX_MD_SIZE];
+  unsigned int hash_len = 0;
+
+  if (EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1)
+    throw std::runtime_error("erro no digestFinal");
+
+  EVP_MD_CTX_free(ctx);
+
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0');
+
+  for (unsigned i = 0; i < hash_len; ++i)
+    oss << std::setw(2) << (int)hash[i];
+
+  return oss.str();
 }
 
 int main() {
@@ -92,7 +135,6 @@ int main() {
     size_t b_recv = 0;
     send(clientfd, request.data(), request.size(), 0);
     if (!(request == "Sair") && strstr(request.data(), "Chat") == NULL) {
-      printf("oi");
       recv(clientfd, &size, sizeof(size), 0);
       send(clientfd, "Manda", 5, 0);
     }
@@ -102,6 +144,7 @@ int main() {
       b_recv = recv(clientfd, buff, MAX_BUFFER_SIZE, 0);
       if (request == "Sair") {
         std::cout << buff << std::endl;
+        delete[] buff;
         close(clientfd);
         return -1;
       } else if (strstr(buff, "Chat") != NULL) {
@@ -117,6 +160,18 @@ int main() {
         temp_size += b_recv;
         std::cout << temp_size << std::endl;
         if (temp_size >= size) {
+          std::string local_hash = sha256_file(file_name);
+          std::string hash;
+          hash.resize(64);
+          send(clientfd, "Manda", 5, 0);
+          recv(clientfd, hash.data(), hash.size(), 0);
+          std::cout << local_hash << std::endl;
+          std::cout << hash << std::endl;
+          if (local_hash == hash) {
+            std::cout << "Arquivo íntegro" << std::endl;
+          } else {
+            std::cerr << "Arquivo corrompido" << std::endl;
+          }
           break;
         }
       }
