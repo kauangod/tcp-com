@@ -130,7 +130,12 @@ int main() {
   }
 
   std::streamsize size = 0;
+  std::ifstream existing_file_check(file_name, std::ios::binary);
 
+  if (existing_file_check.good()) {
+    existing_file_check.close();
+    std::remove(file_name.c_str());
+  }
   for (;;) {
     size_t b_recv = 0;
     send(clientfd, request.data(), request.size(), 0);
@@ -158,15 +163,19 @@ int main() {
         ofs.write(buff, b_recv);
         ofs.close();
         temp_size += b_recv;
-        std::cout << temp_size << std::endl;
         if (temp_size >= size) {
           std::string local_hash = sha256_file(file_name);
           std::string hash;
           hash.resize(64);
           send(clientfd, "Manda", 5, 0);
           recv(clientfd, hash.data(), hash.size(), 0);
-          std::cout << local_hash << std::endl;
-          std::cout << hash << std::endl;
+          std::cout << "hash calculado no cliente: " << local_hash << std::endl;
+          std::cout << "hash calculado na thread do server: " << hash
+                    << std::endl;
+          std::cout << "nome do arquivo: " << file_name << std::endl;
+          std::cout << "tamanho do arquivo: " << std::fixed
+                    << std::setprecision(2) << (float)temp_size / 1000000
+                    << "MB" << std::endl;
           if (local_hash == hash) {
             std::cout << "Arquivo íntegro" << std::endl;
           } else {

@@ -112,7 +112,9 @@ void *client_thread(void *arg) {
       std::streamsize bytes_read = 0, size = ifs.tellg();
       ifs.seekg(0, std::ios::beg);
       send(sock, &size, sizeof(size), 0);
-      recv(sock, request.data(), request.size(), 0);
+      char* buf = new char[5];
+      recv(sock, buf, 5, 0);
+      delete[] buf;
       while (!ifs.eof()) {
         char *buff = new char[4096];
         ifs.read(buff, 4096);
