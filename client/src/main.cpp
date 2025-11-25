@@ -137,23 +137,36 @@ int main() {
     std::remove(file_name.c_str());
   }
   for (;;) {
-    size_t b_recv = 0;
+    char *buff = new char[MAX_BUFFER_SIZE];
+    size_t b_recv = 0, first_recv_b = 0;
+    bool flag_chat = false;
     send(clientfd, request.data(), request.size(), 0);
-    if (!(request == "Sair") && strstr(request.data(), "Chat") == NULL) {
-      recv(clientfd, &size, sizeof(size), 0);
-      send(clientfd, "Manda", 5, 0);
+    if (strstr(request.data(), "Chat")) {
+      flag_chat = true;
+    } else if (!(request == "Sair") && strstr(request.data(), "Chat") == NULL) {
+      first_recv_b = recv(clientfd, buff, MAX_BUFFER_SIZE, 0);
+      if (strstr(buff, "Chat") != NULL) {
+        flag_chat = true;
+        buff[first_recv_b] = '\0';
+        printf("%s", buff);
+      } else {
+        send(clientfd, "Manda", 5, 0);
+      }
     }
     size_t temp_size = 0;
     for (;;) {
-      char *buff = new char[MAX_BUFFER_SIZE];
+      if (flag_chat) {
+        break;
+      }
       b_recv = recv(clientfd, buff, MAX_BUFFER_SIZE, 0);
+      std::cout << buff << std::endl;
       if (request == "Sair") {
         std::cout << buff << std::endl;
         delete[] buff;
         close(clientfd);
         return -1;
-      } else if (strstr(buff, "Chat") != NULL) {
-        std::cout << buff << std::endl;
+      } else if (buff[0] == 'E' && buff[1] == 'R' && buff[2] == 'R') {
+        std::cout << &buff[3] << std::endl;
         break;
       } else {
         std::ofstream ofs(file_name, std::ios::binary | std::ios::app);
@@ -186,6 +199,7 @@ int main() {
       }
       delete[] buff;
     }
+    delete[] buff;
     std::cout << "Faça outra requisição ao servidor: " << std::endl;
     std::getline(std::cin >> std::ws, request);
   }

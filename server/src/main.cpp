@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <netinet/in.h>
 #include <openssl/evp.h>
@@ -12,31 +14,33 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
-#include <iomanip>
 #define PORT 7777
 #define MAX_QUEUED_CONNECTIONS 5
 
-std::vector<int> client_list;
+std::vector<int> clients_list;
 pthread_mutex_t print_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t clients_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-std::string sha256_file(const std::string &path){ /* made by AI */
+std::string sha256_file(const std::string &path) { /* made by AI */
   std::ifstream f(path, std::ios::binary);
-  
-  if (!f) throw std::runtime_error("erro ao abrir o arquivo");
-  
-  EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-  
-  if (!ctx) throw std::runtime_error("erro ao criar o contexto");
-  
+
+  if (!f)
+    throw std::runtime_error("erro ao abrir o arquivo");
+
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+
+  if (!ctx)
+    throw std::runtime_error("erro ao criar o contexto");
+
   if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1)
     throw std::runtime_error("erro no digestInit");
 
   char buf[4096];
-  
-  while(f.good()){
+
+  while (f.good()) {
     f.read(buf, sizeof(buf));
     std::streamsize s = f.gcount();
-    if (s > 0){
+    if (s > 0) {
       if (EVP_DigestUpdate(ctx, buf, s) != 1)
         throw std::runtime_error("erro no digestUpdate");
     }
@@ -44,7 +48,7 @@ std::string sha256_file(const std::string &path){ /* made by AI */
   unsigned char hash[EVP_MAX_MD_SIZE];
   unsigned int hash_len = 0;
 
-  if(EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1)
+  if (EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1)
     throw std::runtime_error("erro no digestFinal");
 
   EVP_MD_CTX_free(ctx);
@@ -70,12 +74,18 @@ void *client_thread(void *arg) {
   for (;;) {
     request.resize(100);
     recv_status = recv(sock, request.data(), request.size(), 0);
+    std::cout << request << std::endl;
     request[recv_status] = '\0';
     std::cout << request << std::endl;
     if (!strcmp(request.data(), "Sair")) {
       msg = "Tchau cliente " + std::to_string(id) + '\0';
+      printf("%s", msg.data());
       send(sock, msg.data(), msg.size(), 0);
-      close(sock);
+      pthread_mutex_lock(&clients_mtx);
+      clients_list.erase(
+          std::remove(clients_list.begin(), clients_list.end(), sock),
+          clients_list.end());
+      pthread_mutex_unlock(&clients_mtx);
       pthread_exit(nullptr);
     } else if (strstr(request.data(), "Chat") != NULL) {
       pthread_mutex_lock(&print_lock);
@@ -88,7 +98,8 @@ void *client_thread(void *arg) {
           file_err = 0;
           break;
         } else if ((i + 1) > (request.size() - 1)) {
-          std::cerr << "Forneça o nome do arquivo requisitado" << std::endl;
+          msg = "ERRForneça o nome do arquivo requisitado";
+          send(sock, msg.c_str(), msg.length(), 0);
           file_err = -1;
           break;
         }
@@ -104,15 +115,17 @@ void *client_thread(void *arg) {
       }
       std::ifstream ifs(file_name, std::ios::binary | std::ios::ate);
       if (!ifs.is_open()) {
-        msg = "Arquivo não encontrado!";
+        msg = "ERRArquivo não encontrado!";
         send(sock, msg.c_str(), msg.length(), 0);
         continue;
       }
       request.clear();
       std::streamsize bytes_read = 0, size = ifs.tellg();
       ifs.seekg(0, std::ios::beg);
+      pthread_mutex_lock(&clients_mtx);
       send(sock, &size, sizeof(size), 0);
-      char* buf = new char[5];
+      pthread_mutex_unlock(&clients_mtx);
+      char *buf = new char[5];
       recv(sock, buf, 5, 0);
       delete[] buf;
       while (!ifs.eof()) {
@@ -122,7 +135,7 @@ void *client_thread(void *arg) {
         send(sock, buff, bytes_read, 0);
         delete[] buff;
       }
-      char* buff = new char[5];
+      char *buff = new char[5];
       recv(sock, buff, 5, 0);
       std::string local_hash = sha256_file(file_name);
       send(sock, local_hash.data(), local_hash.size(), 0);
@@ -134,13 +147,35 @@ void *client_thread(void *arg) {
   return nullptr;
 }
 
+void *console_thread(void *arg) {
+  while (true) {
+    std::string msg;
+    std::cout << "Mensagem do servidor para o cliente:" << std::endl;
+    std::getline(std::cin, msg);
+
+    msg += '\n';
+
+    pthread_mutex_lock(&clients_mtx);
+
+    for (int fd : clients_list) {
+      send(fd, msg.c_str(), msg.size(), 0);
+    }
+
+    pthread_mutex_unlock(&clients_mtx);
+  }
+
+  return nullptr;
+}
+
 int main() {
-  int serverfd, bind_status, thread_status;
+  int serverfd, bind_status, thread_status, cons_thread_status;
   int *client_sck = new int();
   socklen_t addr_len;
   struct sockaddr_in addr;
   pthread_t thread_id;
-
+  cons_thread_status = pthread_create(&thread_id, NULL, console_thread, NULL);
+  if (cons_thread_status != 0)
+    std::cout << "Erro na criação da thread do console" << std::endl;
   serverfd = socket(AF_INET, SOCK_STREAM, 0);
   addr.sin_family = AF_INET;
   addr.sin_port = htons(PORT);
@@ -155,8 +190,9 @@ int main() {
       std::cerr << "Erro na criação do socket para o cliente!" << std::endl;
       break;
     }
-
-    client_list.push_back(*client_sck);
+    pthread_mutex_lock(&clients_mtx);
+    clients_list.push_back(*client_sck);
+    pthread_mutex_unlock(&clients_mtx);
     thread_status =
         pthread_create(&thread_id, NULL, client_thread, (void *)client_sck);
 
