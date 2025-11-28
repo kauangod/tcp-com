@@ -193,6 +193,7 @@ void *send_client_thread(void *arg) {
           break;
         std::cout << bytes_read << std::endl;
         send(sock, buff, bytes_read, 0);
+        // sleep(2);
       }
       std::string local_hash = sha256_file(file_name);
       send(sock, local_hash.data(), local_hash.size(), 0);

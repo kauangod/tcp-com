@@ -199,7 +199,6 @@ int main() {
           break;
         }
       }
-      delete[] buff;
     }
     delete[] buff;
     std::cout << "Faça outra requisição ao servidor: " << std::endl;
