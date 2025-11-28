@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <arpa/inet.h>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mqueue.h>
 #include <netinet/in.h>
 #include <openssl/evp.h>
 #include <pthread.h>
@@ -12,14 +14,21 @@
 #include <string.h>
 #include <string>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 #define PORT 7777
 #define MAX_QUEUED_CONNECTIONS 5
-
+#define BUFF_SIZ 256
 std::vector<int> clients_list;
 pthread_mutex_t print_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t clients_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+typedef struct {
+  int sock;
+  char queue_name[32];
+  struct mq_attr attr;
+} thread_args;
 
 std::string sha256_file(const std::string &path) { /* made by AI */
   std::ifstream f(path, std::ios::binary);
@@ -61,31 +70,80 @@ std::string sha256_file(const std::string &path) { /* made by AI */
 
   return oss.str();
 }
-
-void *client_thread(void *arg) {
+void *recv_client_thread(void *arg) {
   std::string request;
-  std::string msg;
-  int recv_status, sock, i = 0;
-  pthread_t id = pthread_self();
-  sock = *(int *)arg;
-  int file_err = 0;
+  int recv_status, sock;
+  sock = ((thread_args *)arg)->sock;
 
-  // std::getline(std::cin >> std::ws, command);
+  mqd_t mq = mq_open(((thread_args *)arg)->queue_name, O_CREAT | O_WRONLY, 0666,
+                     &(((thread_args *)arg)->attr));
   for (;;) {
-    request.resize(100);
+    int return_send;
+    request.resize(BUFF_SIZ);
     recv_status = recv(sock, request.data(), request.size(), 0);
-    std::cout << request << std::endl;
+    if (recv_status <= 0) {
+      if (recv_status < 0) {
+        perror("recv");
+      }
+      continue;
+    }
     request[recv_status] = '\0';
     std::cout << request << std::endl;
+    return_send =
+        mq_send(mq, request.data(), static_cast<size_t>(recv_status), 0);
+    if (return_send == -1) {
+      perror("mq_send");
+    }
+    if (!strcmp(request.data(), "Sair")) {
+      request.clear();
+      mq_close(mq);
+      mq_unlink(((thread_args *)arg)->queue_name);
+      pthread_exit(nullptr);
+    }
+    request.clear();
+  }
+  return nullptr;
+}
+
+void *send_client_thread(void *arg) {
+  sleep(1);
+  std::string request;
+  std::string msg;
+  ssize_t msg_size = 0;
+  int sock, i = 0;
+  pthread_t id = pthread_self();
+  sock = ((thread_args *)arg)->sock;
+  int file_err = 0;
+  mqd_t mq = mq_open(((thread_args *)arg)->queue_name, O_RDONLY, 0666,
+                     &(((thread_args *)arg)->attr));
+  request.resize(BUFF_SIZ);
+  for (;;) {
+    request.resize(BUFF_SIZ);
+    msg_size = mq_receive(mq, request.data(), request.size(), NULL);
+    if (msg_size >= 0) {
+    } else {
+      perror("mq_receive");
+      continue;
+    }
+    if (strstr(request.data(), "Chat") == NULL) {
+      pthread_mutex_lock(&print_lock);
+      std::cout << request << std::endl;
+      pthread_mutex_unlock(&print_lock);
+    }
     if (!strcmp(request.data(), "Sair")) {
       msg = "Tchau cliente " + std::to_string(id) + '\0';
+      pthread_mutex_lock(&print_lock);
       printf("%s", msg.data());
+      pthread_mutex_unlock(&print_lock);
       send(sock, msg.data(), msg.size(), 0);
       pthread_mutex_lock(&clients_mtx);
       clients_list.erase(
           std::remove(clients_list.begin(), clients_list.end(), sock),
           clients_list.end());
       pthread_mutex_unlock(&clients_mtx);
+      request.clear();
+      mq_close(mq);
+      mq_unlink(((thread_args *)arg)->queue_name);
       pthread_exit(nullptr);
     } else if (strstr(request.data(), "Chat") != NULL) {
       pthread_mutex_lock(&print_lock);
@@ -125,21 +183,19 @@ void *client_thread(void *arg) {
       pthread_mutex_lock(&clients_mtx);
       send(sock, &size, sizeof(size), 0);
       pthread_mutex_unlock(&clients_mtx);
-      char *buf = new char[5];
-      recv(sock, buf, 5, 0);
-      delete[] buf;
+      char buf[BUFF_SIZ]; // qlqr coisa volta pro heap aqui
+      char buff[4096];
       while (!ifs.eof()) {
-        char *buff = new char[4096];
+        // std::cout << "Ta rodando o while do arquivo!" << std::endl;
         ifs.read(buff, 4096);
         bytes_read = ifs.gcount();
+        if (bytes_read <= 0)
+          break;
+        std::cout << bytes_read << std::endl;
         send(sock, buff, bytes_read, 0);
-        delete[] buff;
       }
-      char *buff = new char[5];
-      recv(sock, buff, 5, 0);
       std::string local_hash = sha256_file(file_name);
       send(sock, local_hash.data(), local_hash.size(), 0);
-      delete[] buff;
       ifs.close();
     }
     request.clear();
@@ -150,9 +206,9 @@ void *client_thread(void *arg) {
 void *console_thread(void *arg) {
   while (true) {
     std::string msg;
-    std::cout << "Mensagem do servidor para o cliente:" << std::endl;
+    std::cout << "Mensagem do servidor para o cliente:";
     std::getline(std::cin, msg);
-
+    std::cout << std::endl;
     msg += '\n';
 
     pthread_mutex_lock(&clients_mtx);
@@ -168,12 +224,11 @@ void *console_thread(void *arg) {
 }
 
 int main() {
-  int serverfd, bind_status, thread_status, cons_thread_status;
-  int *client_sck = new int();
+  int serverfd, bind_status, thread_status, cons_thread_status, id = 0;
   socklen_t addr_len;
   struct sockaddr_in addr;
-  pthread_t thread_id;
-  cons_thread_status = pthread_create(&thread_id, NULL, console_thread, NULL);
+  pthread_t sender_thread, receiver_thread, cons_thread;
+  cons_thread_status = pthread_create(&cons_thread, NULL, console_thread, NULL);
   if (cons_thread_status != 0)
     std::cout << "Erro na criação da thread do console" << std::endl;
   serverfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -184,24 +239,44 @@ int main() {
   bind_status = bind(serverfd, (struct sockaddr *)&addr, addr_len);
   listen(serverfd, MAX_QUEUED_CONNECTIONS);
 
+  thread_args *args = new thread_args();
+
   for (;;) {
-    *client_sck = accept(serverfd, (struct sockaddr *)&addr, &addr_len);
-    if (*client_sck < 0) {
+    int client_sock = accept(serverfd, (struct sockaddr *)&addr, &addr_len);
+    if (client_sock < 0) {
       std::cerr << "Erro na criação do socket para o cliente!" << std::endl;
       break;
     }
+    thread_args *args = new thread_args();
+    args->sock = client_sock;
+    args->attr.mq_flags = 0;
+    args->attr.mq_maxmsg = 10;
+    args->attr.mq_msgsize = BUFF_SIZ;
+    args->attr.mq_curmsgs = 0;
+    snprintf(args->queue_name, sizeof(args->queue_name), "/cliente_%d", id++);
+    mq_unlink(args->queue_name);
+
     pthread_mutex_lock(&clients_mtx);
-    clients_list.push_back(*client_sck);
+    clients_list.push_back(args->sock);
     pthread_mutex_unlock(&clients_mtx);
+
     thread_status =
-        pthread_create(&thread_id, NULL, client_thread, (void *)client_sck);
+        pthread_create(&sender_thread, NULL, send_client_thread, (void *)args);
 
     if (thread_status != 0) {
-      std::cerr << "Erro na criação da thread do cliente!" << std::endl;
+      std::cerr << "Erro na criação da thread de envio do cliente!"
+                << std::endl;
       break;
     }
-    client_sck = new int();
-  }
 
+    thread_status = pthread_create(&receiver_thread, NULL, recv_client_thread,
+                                   (void *)args);
+
+    if (thread_status != 0) {
+      std::cerr << "Erro na criação da thread de envio do cliente!"
+                << std::endl;
+      break;
+    }
+  }
   return 0;
 }

@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iomanip>
 #include <ios>
@@ -143,14 +144,14 @@ int main() {
     send(clientfd, request.data(), request.size(), 0);
     if (strstr(request.data(), "Chat")) {
       flag_chat = true;
-    } else if (!(request == "Sair") && strstr(request.data(), "Chat") == NULL) {
+    } else if (!(request == "Sair")) {
       first_recv_b = recv(clientfd, buff, MAX_BUFFER_SIZE, 0);
       if (strstr(buff, "Chat") != NULL) {
-        flag_chat = true;
         buff[first_recv_b] = '\0';
         printf("%s", buff);
+        continue;
       } else {
-        send(clientfd, "Manda", 5, 0);
+        memcpy(&size, buff, sizeof(size));
       }
     }
     size_t temp_size = 0;
@@ -159,7 +160,9 @@ int main() {
         break;
       }
       b_recv = recv(clientfd, buff, MAX_BUFFER_SIZE, 0);
-      std::cout << buff << std::endl;
+      if (strstr(buff, "Tchau") != NULL) {
+        std::cout << buff << std::endl;
+      }
       if (request == "Sair") {
         std::cout << buff << std::endl;
         delete[] buff;
@@ -180,7 +183,6 @@ int main() {
           std::string local_hash = sha256_file(file_name);
           std::string hash;
           hash.resize(64);
-          send(clientfd, "Manda", 5, 0);
           recv(clientfd, hash.data(), hash.size(), 0);
           std::cout << "hash calculado no cliente: " << local_hash << std::endl;
           std::cout << "hash calculado na thread do server: " << hash
