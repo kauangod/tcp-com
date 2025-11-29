@@ -88,7 +88,6 @@ void *recv_client_thread(void *arg) {
       continue;
     }
     request[recv_status] = '\0';
-    std::cout << request << std::endl;
     return_send =
         mq_send(mq, request.data(), static_cast<size_t>(recv_status), 0);
     if (return_send == -1) {
@@ -129,13 +128,17 @@ void *send_client_thread(void *arg) {
       pthread_mutex_lock(&print_lock);
       std::cout << request << std::endl;
       pthread_mutex_unlock(&print_lock);
+      std::cout << "Soltou o mutex!" << std::endl;
     }
-    if (!strcmp(request.data(), "Sair")) {
+    if (strstr(request.data(), "Sair") != NULL) {
       msg = "Tchau cliente " + std::to_string(id) + '\0';
+      std::cout << "Antes de pegar o mutex no SAIR" << std::endl;
       pthread_mutex_lock(&print_lock);
-      printf("%s", msg.data());
+      std::cout << msg << std::endl;
       pthread_mutex_unlock(&print_lock);
+      std::cout << "Soltou o mutex do SAIR" << std::endl;
       send(sock, msg.data(), msg.size(), 0);
+      std::cout << "Mandou a mensagem do SAIR!" << std::endl;
       pthread_mutex_lock(&clients_mtx);
       clients_list.erase(
           std::remove(clients_list.begin(), clients_list.end(), sock),
@@ -183,17 +186,14 @@ void *send_client_thread(void *arg) {
       pthread_mutex_lock(&clients_mtx);
       send(sock, &size, sizeof(size), 0);
       pthread_mutex_unlock(&clients_mtx);
-      char buf[BUFF_SIZ]; // qlqr coisa volta pro heap aqui
+      char buf[BUFF_SIZ];
       char buff[4096];
       while (!ifs.eof()) {
-        // std::cout << "Ta rodando o while do arquivo!" << std::endl;
         ifs.read(buff, 4096);
         bytes_read = ifs.gcount();
         if (bytes_read <= 0)
           break;
-        std::cout << bytes_read << std::endl;
         send(sock, buff, bytes_read, 0);
-        // sleep(2);
       }
       std::string local_hash = sha256_file(file_name);
       send(sock, local_hash.data(), local_hash.size(), 0);

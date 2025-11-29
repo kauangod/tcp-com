@@ -85,7 +85,7 @@ int main() {
   socklen_t addr_len;
   struct sockaddr_in server_addr;
   std::string request, ip, file_name;
-
+  bool def_size = false;
   std::cout << "Faça uma requisição ao servidor: ";
   std::getline(std::cin >> std::ws, request);
   parse_result = parse_command(request, &o1, &o2, &o3, &o4);
@@ -144,7 +144,8 @@ int main() {
     send(clientfd, request.data(), request.size(), 0);
     if (strstr(request.data(), "Chat")) {
       flag_chat = true;
-    } else if (!(request == "Sair")) {
+    } else if (!strstr(request.data(), "Sair")) {
+      std::cout << "Esperando receber o tamanho: " << std::endl;
       first_recv_b = recv(clientfd, buff, MAX_BUFFER_SIZE, 0);
       if (strstr(buff, "Chat") != NULL) {
         buff[first_recv_b] = '\0';
@@ -152,6 +153,7 @@ int main() {
         continue;
       } else {
         memcpy(&size, buff, sizeof(size));
+        def_size = true;
       }
     }
     size_t temp_size = 0;
@@ -160,7 +162,7 @@ int main() {
         break;
       }
       b_recv = recv(clientfd, buff, MAX_BUFFER_SIZE, 0);
-      if (strstr(buff, "Tchau") != NULL) {
+      if (strstr(buff, "Tchau") == NULL && !def_size) {
         std::cout << buff << std::endl;
       }
       if (request == "Sair") {
